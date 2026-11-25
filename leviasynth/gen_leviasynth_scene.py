@@ -311,12 +311,56 @@ GROUP_COLOR: dict[str, int] = {
     "macro": 80, "global": 0, "voice": 30,
     "dfilt": 50, "afilt": 20, "vca": 70, "free": 10,
     "prefx": 30, "delay": 60, "reverb": 90, "postfx": 80,
-    # A monotonic ramp across the eight oscillators, which reads as a gradient
-    # down the OSC pages and across the OSC MIX rows. The synth colour-codes
-    # its oscillators too (Osc 1 cyan, Osc 2 green, manual p. 32) but only
-    # names those two, so re-order these if you want them to match the panel.
-    **{f"osc{n}": (n - 1) * 10 for n in range(1, 9)},
+    # Matched to the Leviasynth's own panel colour coding, as closely as this
+    # palette allows. The synth runs cyan, green, yellow, orange, orange, red,
+    # magenta, blue across its eight oscillators; the E16 has no orange and no
+    # yellow, so oscillators 3, 4 and 5 are approximations — 3 takes lime as
+    # the nearest thing to yellow, and 4 and 5 take the warmest and the
+    # remaining distinct entries since nothing orange exists.
+    "osc1": 80,   # cyan    <- panel cyan
+    "osc2": 40,   # green   <- panel green
+    "osc3": 90,   # lime    <- panel yellow, nearest available
+    "osc4": 50,   # pink    <- panel orange, nothing close
+    "osc5": 0,    # purple  <- panel orange, nothing close
+    "osc6": 60,   # red     <- panel red
+    "osc7": 70,   # magenta <- panel magenta
+    "osc8": 10,   # blue    <- panel blue
 }
+
+
+# The E16 stores a control colour as an index 0-100 — a "colour rotation" in
+# the manual's words (section 2.8, p. 21). These RGBs were sampled at 300 dpi
+# from the spectrum strip the manual prints on that page, and match what the
+# editor renders for this scene.
+#
+# It is emphatically NOT a hue ramp: neighbouring indices are not neighbouring
+# colours, and there is no orange or yellow anywhere in it. Pick colours by
+# looking them up here, never by assuming an index arithmetic.
+PALETTE: dict[int, tuple[str, str]] = {
+    0:   ("#6e67ae", "slate purple"),
+    10:  ("#4eb0e3", "blue"),
+    20:  ("#b5def5", "pale blue"),
+    30:  ("#d0c1df", "pale lavender"),
+    40:  ("#7dc472", "green"),
+    50:  ("#f3bad5", "pink"),
+    60:  ("#e01c47", "red"),
+    70:  ("#c65aa2", "magenta"),
+    80:  ("#3dbded", "cyan"),
+    90:  ("#a0cc3a", "lime"),
+    100: ("#6cc6b3", "teal"),
+}
+
+
+def color_distance(a: int, b: int) -> float:
+    """Rough perceptual distance between two palette indices, using the
+    "redmean" approximation. The palette's own closest pair (blue 10 vs
+    cyan 80) scores about 40, its farthest (red 60 vs cyan 80) about 490."""
+    ra, ga, ba = (int(PALETTE[a][0][i:i + 2], 16) for i in (1, 3, 5))
+    rb, gb, bb = (int(PALETTE[b][0][i:i + 2], 16) for i in (1, 3, 5))
+    rm = (ra + rb) / 2
+    dr, dg, db = ra - rb, ga - gb, ba - bb
+    return ((2 + rm / 256) * dr * dr + 4 * dg * dg
+            + (2 + (255 - rm) / 256) * db * db) ** 0.5
 
 
 def color_for_key(key: str) -> int:
@@ -495,6 +539,23 @@ def check_tables() -> None:
     for title, rows in LAYOUT:
         if len(rows) != 4 or any(len(row) != 4 for row in rows):
             raise SystemExit(f"Page {title!r} is not 4x4.")
+
+    if bad := sorted(set(GROUP_COLOR.values()) - set(PALETTE)):
+        raise SystemExit(f"GROUP_COLOR uses indices outside 0-100: {bad}")
+
+    # Two different groups sharing one page must not share a colour, or the
+    # colour stops carrying any information on that page.
+    for title, rows in LAYOUT:
+        groups = {KEY_GROUP.get(key, "") for row in rows for key in row
+                  if key != "-"}
+        by_color: dict[int, list[str]] = {}
+        for group in groups:
+            by_color.setdefault(GROUP_COLOR.get(group, 0), []).append(group)
+        for color, sharing in by_color.items():
+            if len(sharing) > 1:
+                raise SystemExit(
+                    f"Page {title!r}: groups {sorted(sharing)} all use colour "
+                    f"{color} ({PALETTE[color][1]}).")
 
 
 def resolve_scene_dir(argv: list[str] | None = None) -> Path:
